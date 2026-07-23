@@ -5,5 +5,5 @@ object NetworkConstants {
     const val BASE_URL     = "https://platform-api.kankunapaq.com/"
     const val PROJECT_SLUG = "c22200002"
 
-    const val GOOGLE_WEB_CLIENT_ID = "1049871926050-b0h9b9aq5svmvubgps7ge2e19bn3m4lk.apps.googleusercontent.com"
+    const val GOOGLE_WEB_CLIENT_ID = "1074854237747-2lh6eg43njj9mvirlqjmv0d4ql2tj53r.apps.googleusercontent.com"
 }
