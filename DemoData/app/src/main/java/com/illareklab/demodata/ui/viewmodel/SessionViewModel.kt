@@ -1,22 +1,24 @@
 package com.illareklab.demodata.ui.viewmodel
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.illareklab.demodata.data.remote.NetworkConstants
+import com.illareklab.demodata.data.remote.RetrofitClient
+import com.illareklab.demodata.data.remote.model.*
 import com.illareklab.demodata.data.session.SessionManager
-import com.illareklab.demodata.security.PasswordHasher
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 
 class SessionViewModel(
     private val sessionManager: SessionManager
 ) : ViewModel() {
 
-    private val SALT_FIJO = "DemoData_salt_seguro".toByteArray()
-
-    private val HASH_CREDENTIAL_VALIDA = "46c91a0c8702f2324f6055d28b188863f691c21051515f7956a9391060934661"
+    private val json = Json { ignoreUnknownKeys = true }
 
     val isLoggedIn = sessionManager.isLoggedIn.stateIn(
         scope        = viewModelScope,
@@ -36,24 +38,71 @@ class SessionViewModel(
         initialValue = null
     )
 
-    fun login(username: String, password: String, onResult: (Boolean) -> Unit) {
-        val userClean = username.trim().lowercase()
-        val passClean = password.trim()
+    val currentSlug: StateFlow<String> = sessionManager.projectSlug.stateIn(
+        scope        = viewModelScope,
+        started      = SharingStarted.WhileSubscribed(5000),
+        initialValue = NetworkConstants.PROJECT_SLUG
+    )
 
-        val contrasenaHasheada = PasswordHasher.hash(passClean, SALT_FIJO)
+    fun updateSlug(newSlug: String) {
+        viewModelScope.launch {
+            sessionManager.setProjectSlug(newSlug)
+        }
+    }
 
-        Log.d("LoginDebug", "Intento login: $userClean | Hash generado: $contrasenaHasheada")
-
-        val esUsuarioValido = userClean == "jkn"
-        val esContrasenaValida = PasswordHasher.constantTimeEquals(contrasenaHasheada, HASH_CREDENTIAL_VALIDA) || passClean == "jkn"
-
-        if (esUsuarioValido && esContrasenaValida) {
-            viewModelScope.launch {
-                sessionManager.login(userClean)
-                onResult(true)
+    fun login(email: String, password: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val slug = currentSlug.value
+                val response = RetrofitClient.apiService.login(
+                    projectSlug = slug,
+                    request     = LoginRequest(
+                        email    = email.trim(),
+                        password = password.trim(),
+                        deviceId = sessionManager.getDeviceId()
+                    )
+                )
+                if (response.isSuccessful && response.body() != null) {
+                    val body = response.body()!!
+                    sessionManager.login(email.trim(), body.accessToken, body.refreshToken)
+                    onResult(true, null)
+                } else {
+                    val errorMsg = parseError(response.errorBody()?.string())
+                    onResult(false, errorMsg ?: "Credenciales incorrectas")
+                }
+            } catch (e: Exception) {
+                onResult(false, "Error de red: ${e.localizedMessage}")
             }
-        } else {
-            onResult(false)
+        }
+    }
+
+    fun register(email: String, password: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.apiService.register(
+                    projectSlug = currentSlug.value,
+                    request     = RegisterRequest(email.trim(), password.trim())
+                )
+                if (response.isSuccessful) {
+                    onResult(true, null)
+                } else {
+                    val errorMsg = parseError(response.errorBody()?.string())
+                    onResult(false, errorMsg ?: "Error al registrar")
+                }
+            } catch (e: Exception) {
+                onResult(false, "Error de red: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    private fun parseError(errorBody: String?): String? {
+        return try {
+            errorBody?.let {
+                val errorResponse = json.decodeFromString<ErrorResponse>(it)
+                errorResponse.message
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 

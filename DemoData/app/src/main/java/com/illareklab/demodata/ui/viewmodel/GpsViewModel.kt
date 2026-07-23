@@ -1,6 +1,7 @@
 package com.illareklab.demodata.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.illareklab.demodata.data.local.entity.GpsGoogleEntity
 import com.illareklab.demodata.data.local.entity.GpsSensorsEntity
@@ -50,6 +51,16 @@ class GpsViewModel(private val gpsRepository: GpsRepository) : ViewModel() {
     fun clearAll() {
         viewModelScope.launch {
             gpsRepository.clearAll()
+        }
+    }
+
+    class Factory(private val gpsRepository: GpsRepository) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(GpsViewModel::class.java)) {
+                return GpsViewModel(gpsRepository) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class")
         }
     }
 }

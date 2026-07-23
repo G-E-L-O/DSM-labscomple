@@ -33,7 +33,6 @@ fun HistoryScreen(historyViewModel: HistoryViewModel) {
 
             IconButton(onClick = {
                 historyViewModel.exportToCsv { file ->
-
                 }
             }) {
                 Text("📊 CSV", style = MaterialTheme.typography.labelSmall)
@@ -86,7 +85,6 @@ fun HistoryCard(item: ActivityItem) {
         )
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-
             if (item is ActivityItem.Photo || item is ActivityItem.Video) {
                 val path = if (item is ActivityItem.Photo) item.rutaArchivo else (item as ActivityItem.Video).rutaArchivo
                 AsyncImage(
@@ -125,6 +123,10 @@ fun HistoryCard(item: ActivityItem) {
                     is ActivityItem.Photo -> Text("Img: ${item.rutaArchivo.substringAfterLast("/")}", style = MaterialTheme.typography.bodySmall)
                     is ActivityItem.Video -> Text("Vid: ${item.rutaArchivo.substringAfterLast("/")}", style = MaterialTheme.typography.bodySmall)
                     is ActivityItem.Audio -> Text("Aud: ${item.rutaArchivo.substringAfterLast("/")}", style = MaterialTheme.typography.bodySmall)
+                }
+
+                if (item.isRemote) {
+                    Text("Origen: Nube ☁️", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
             }
         }

@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
 import com.illareklab.demodata.data.local.AppDatabase
 import com.illareklab.demodata.data.local.FileStorageManager
+import com.illareklab.demodata.data.remote.RetrofitClient
 import com.illareklab.demodata.data.repository.AudioRepository
 import com.illareklab.demodata.data.repository.GpsRepository
 import com.illareklab.demodata.data.repository.MediaRepository
@@ -41,6 +42,8 @@ class DemoDataApp : Application(), ImageLoaderFactory {
         fileStorage = FileStorageManager(this)
         mediaRepository = MediaRepository(database.mediaDao(), fileStorage)
         audioRepository = AudioRepository(database.audioDao(), fileStorage)
+
+        RetrofitClient.init(sessionManager)
     }
 
     override fun newImageLoader(): ImageLoader {
