@@ -10,12 +10,15 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.illareklab.demodata.data.remote.NetworkConstants
 import com.illareklab.demodata.data.remote.RetrofitClient
+import com.illareklab.demodata.data.remote.model.GeoEventRequest
+import com.illareklab.demodata.data.remote.model.GeoEventResponse
 import com.illareklab.demodata.data.remote.model.GpsSyncRequest
 import com.illareklab.demodata.data.repository.AudioRepository
 import com.illareklab.demodata.data.repository.GpsRepository
 import com.illareklab.demodata.data.repository.MediaRepository
 import com.illareklab.demodata.data.session.SessionManager
 import com.illareklab.demodata.workers.DelayedNotificationWorker
+import android.os.Build
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -23,8 +26,11 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlin.math.round
 
 data class SyncCounts(
     val gpsGoogle: Int = 0,
@@ -51,6 +57,18 @@ class SyncViewModel(
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing = _isSyncing.asStateFlow()
 
+    private val _syncMessage = MutableStateFlow<String?>(null)
+    val syncMessage = _syncMessage.asStateFlow()
+
+    private val _syncProgress = MutableStateFlow(0f)
+    val syncProgress = _syncProgress.asStateFlow()
+
+    private val _cloudRecords = MutableStateFlow<List<GeoEventResponse>>(emptyList())
+    val cloudRecords = _cloudRecords.asStateFlow()
+
+    private val _isLoadingCloud = MutableStateFlow(false)
+    val isLoadingCloud = _isLoadingCloud.asStateFlow()
+
     val syncCounts: StateFlow<SyncCounts> = combine(
         gpsRepository.googleCount,
         gpsRepository.sensorsCount,
@@ -72,11 +90,139 @@ class SyncViewModel(
         initialValue = SyncCounts()
     )
 
+    private fun Double.round(decimals: Int): Double {
+        var multiplier = 1.0
+        repeat(decimals) { multiplier *= 10 }
+        return round(this * multiplier) / multiplier
+    }
+
+    fun sync(onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _syncProgress.value = 0f
+            _syncMessage.value = "Sincronizando..."
+            try {
+                val googlePoints = gpsRepository.googlePoints.first()
+                val sensorsPoints = gpsRepository.sensorsPoints.first()
+
+                val deviceId = sessionManager.getDeviceId()
+                val userId = sessionManager.userId.first()
+                val currentSlug = sessionManager.projectSlug.first()
+
+                val authHeader: String? = null
+
+                if (userId == null) {
+                    _syncMessage.value = "Error: Sesión no válida"
+                    onResult(false)
+                    return@launch
+                }
+
+                val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+                var successCount = 0
+                val totalToSync = googlePoints.size + sensorsPoints.size
+
+                if (totalToSync == 0) {
+                    _syncMessage.value = "No hay datos pendientes"
+                    _isSyncing.value = false
+                    onResult(true)
+                    return@launch
+                }
+
+                var currentItem = 0
+
+                googlePoints.forEach { point ->
+                    if (point.latitud != 0.0) {
+                        val request = GeoEventRequest(
+                            userId = userId,
+                            latitude = point.latitud.round(7),
+                            longitude = point.longitud.round(7),
+                            altitude = point.altitud.round(2),
+                            accuracy = point.precision.toDouble().round(2),
+                            speed = 0.0,
+                            heading = 0.0,
+                            eventType = "gps_google",
+                            deviceId = deviceId,
+                            appVersion = "1.0.0",
+                            deviceModel = deviceModel,
+
+                            recordedAt = Instant.ofEpochMilli(point.timestamp).truncatedTo(ChronoUnit.SECONDS).toString()
+                        )
+
+                        Log.d("SyncDebug", "Enviando punto google: $request")
+                        val response = RetrofitClient.apiService.createGeoEventORM(currentSlug, authHeader, request)
+                        if (response.isSuccessful) successCount++
+                        else Log.e("SyncDebug", "Error ${response.code()}: ${response.errorBody()?.string()}")
+                    }
+                    currentItem++
+                    _syncProgress.value = currentItem.toFloat() / totalToSync
+                }
+
+                sensorsPoints.forEach { point ->
+                    if (point.latitud != 0.0) {
+                        val request = GeoEventRequest(
+                            userId = userId,
+                            latitude = point.latitud.round(7),
+                            longitude = point.longitud.round(7),
+                            altitude = point.altitud.round(2),
+                            accuracy = 0.0,
+                            speed = 0.0,
+                            heading = 0.0,
+                            eventType = "gps_sensors",
+                            deviceId = deviceId,
+                            appVersion = "1.0.0",
+                            deviceModel = deviceModel,
+                            recordedAt = Instant.ofEpochMilli(point.timestamp).truncatedTo(ChronoUnit.SECONDS).toString()
+                        )
+
+                        Log.d("SyncDebug", "Enviando punto sensors: $request")
+                        val response = RetrofitClient.apiService.createGeoEventORM(currentSlug, authHeader, request)
+                        if (response.isSuccessful) successCount++
+                        else Log.e("SyncDebug", "Error ${response.code()}: ${response.errorBody()?.string()}")
+                    }
+                    currentItem++
+                    _syncProgress.value = currentItem.toFloat() / totalToSync
+                }
+
+                if (successCount > 0) {
+                    gpsRepository.clearAll()
+                    _syncMessage.value = "Éxito: $successCount registros sincronizados"
+                    refreshCloudData()
+                } else {
+                    _syncMessage.value = "Error: El servidor rechazó los datos"
+                }
+                onResult(successCount > 0)
+            } catch (e: Exception) {
+                Log.e("SyncDebug", "Fallo total de sincronización", e)
+                _syncMessage.value = "Error de red"
+                onResult(false)
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    fun refreshCloudData() {
+        viewModelScope.launch {
+            _isLoadingCloud.value = true
+            try {
+                val userIdForFilter = sessionManager.userId.first()
+                val currentSlug = sessionManager.projectSlug.first()
+                val response = RetrofitClient.apiService.listGeoEventsORM(currentSlug, null, userId = userIdForFilter)
+                if (response.isSuccessful) {
+                    _cloudRecords.value = response.body() ?: emptyList()
+                }
+            } catch (e: Exception) {
+                Log.e("SyncDebug", "Error refresh", e)
+            } finally {
+                _isLoadingCloud.value = false
+            }
+        }
+    }
+
     fun forceSync(onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
             _isSyncing.value = true
             try {
-
                 val slug = sessionManager.projectSlug.firstOrNull() ?: NetworkConstants.PROJECT_SLUG
 
                 val googlePoints = gpsRepository.googlePoints.firstOrNull() ?: emptyList()
@@ -91,7 +237,6 @@ class SyncViewModel(
                             timestamp = it.timestamp
                         )
                     }
-
                     RetrofitClient.apiService.syncGps(slug, gpsRequests)
                 }
 
